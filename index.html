@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>2D Shooting Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+      color: #fff;
+    }
+    canvas {
+      background: #87ceeb; /* سماء */
+      border: 2px solid #333;
+    }
+    #ui {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="ui">
+    <div>النتيجة: <span id="score">0</span></div>
+    <div>الصحة: <span id="hp">3</span></div>
+    <div>التحكم: A / D للحركة – W للقفز – Space لإطلاق النار</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const scoreEl = document.getElementById("score");
+    const hpEl = document.getElementById("hp");
+
+    // إعدادات العالم
+    const WORLD_WIDTH = 4000; // طول العالم
+    const GROUND_Y = 420;     // ارتفاع الأرض على الشاشة
+
+    // مفاتيح التحكم
+    const keys = {
+      left: false,
+      right: false,
+      up: false,
+      shoot: false
+    };
+
+    document.addEventListener("keydown", (e) => {
+      if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
+      if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = true;
+      if (e.code === "ArrowUp" || e.code === "KeyW") keys.up = true;
+      if (e.code === "Space") {
+        keys.shoot = true;
+        e.preventDefault();
+      }
+    });
+
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = false;
+      if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = false;
+      if (e.code === "ArrowUp" || e.code === "KeyW") keys.up = false;
+      if (e.code === "Space") keys.shoot = false;
+    });
+
+    // اللاعب
+    const player = {
+      x: 200,
+      y: GROUND_Y - 60,
+      w: 40,
+      h: 60,
+      vx: 0,
+      vy: 0,
+      speed: 4,
+      jumpPower: -11,
+      onGround: false,
+      facing: 1, // 1 يمين, -1 يسار
+      shootCooldown: 0,
+      hp: 3
+    };
+
+    // الرصاص
+    const bullets = [];
+    const enemies = [];
+    const vehicles = [];
+
+    let cameraX = 0;
+    let lastTime = 0;
+    let score = 0;
+    let gameOver = false;
+
+    function spawnEnemies() {
+      // أعداء موزعين على طول الطريق
+      for (let i = 600; i < WORLD_WIDTH; i += 400) {
+        enemies.push({
+          x: i,
+          y: GROUND_Y - 50,
+          w: 35,
+          h: 50,
+          vx: -1.2,
+          alive: true
+        });
+      }
+    }
+
+    function spawnVehicles() {
+      // مركبات كعناصر ديكور على الطريق
+      for (let i = 800; i < WORLD_WIDTH; i += 700) {
+        vehicles.push({
+          x: i,
+          y: GROUND_Y - 30,
+          w: 120,
+          h: 30
+        });
+      }
+    }
+
+    spawnEnemies();
+    spawnVehicles();
+
+    function update(dt) {
+      if (gameOver) return;
+
+      // حركة اللاعب أفقياً
+      player.vx = 0;
+      if (keys.left) {
+        player.vx = -player.speed;
+        player.facing = -1;
+      }
+      if (keys.right) {
+        player.vx = player.speed;
+        player.facing = 1;
+      }
+
+      // قفز
+      if (keys.up && player.onGround) {
+        player.vy = player.jumpPower;
+        player.onGround = false;
+      }
+
+      // جاذبية
+      player.vy += 0.6; // الجاذبية
+
+      player.x += player.vx;
+      player.y += player.vy;
+
+      // اصطدام مع الأرض
+      if (player.y + player.h >= GROUND_Y) {
+        player.y = GROUND_Y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+
+      // حدود العالم
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > WORLD_WIDTH) player.x = WORLD_WIDTH - player.w;
+
+      // إطلاق النار
+      if (player.shootCooldown > 0) player.shootCooldown -= dt;
+      if (keys.shoot && player.shootCooldown <= 0) {
+        bullets.push({
+          x: player.x + (player.facing === 1 ? player.w : 0),
+          y: player.y + player.h / 2,
+          w: 16,
+          h: 4,
+          vx: player.facing * 10
+        });
+        player.shootCooldown = 200; // بالمللي ثانية
+      }
+
+      // تحديث الرصاص
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.x += b.vx;
+
+        // حذف إذا خرج من العالم
+        if (b.x < 0 || b.x > WORLD_WIDTH) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        // تصادم مع الأعداء
+        for (let j = 0; j < enemies.length; j++) {
+          const e = enemies[j];
+          if (!e.alive) continue;
+          if (rectIntersect(b, e)) {
+            e.alive = false;
+            bullets.splice(i, 1);
+            score += 10;
+            scoreEl.textContent = score;
+            break;
+          }
+        }
+      }
+
+      // تحديث الأعداء
+      enemies.forEach((e) => {
+        if (!e.alive) return;
+        // يتحرك ببطء باتجاه اللاعب
+        if (player.x < e.x) e.vx = -1.0;
+        else e.vx = 1.0;
+
+        e.x += e.vx;
+
+        // تثبيتهم على الأرض
+        e.y = GROUND_Y - e.h;
+
+        // إذا لم يكن ميتاً وتلامس مع اللاعب => ينقص HP
+        if (rectIntersect(e, player)) {
+          e.alive = false;
+          player.hp -= 1;
+          hpEl.textContent = player.hp;
+          if (player.hp <= 0) {
+            gameOver = true;
+          }
+        }
+      });
+
+      // الكاميرا تتبع اللاعب
+      cameraX = player.x - canvas.width / 2;
+      if (cameraX < 0) cameraX = 0;
+      if (cameraX > WORLD_WIDTH - canvas.width) {
+        cameraX = WORLD_WIDTH - canvas.width;
+      }
+    }
+
+    function rectIntersect(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    function draw() {
+      // مسح
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // خلفية بعيدة (جبال بسيطة)
+      ctx.save();
+      ctx.translate(-cameraX * 0.3, 0); // parallax
+      ctx.fillStyle = "#b0d5ff";
+      ctx.fillRect(0, 0, WORLD_WIDTH, 300);
+
+      ctx.fillStyle = "#c2b280"; // جبال
+      for (let i = 0; i < WORLD_WIDTH; i += 400) {
+        ctx.beginPath();
+        ctx.moveTo(i, 300);
+        ctx.lineTo(i + 150, 180);
+        ctx.lineTo(i + 300, 300);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // أرض وطريق
+      ctx.save();
+      ctx.translate(-cameraX, 0);
+
+      // أرض
+      ctx.fillStyle = "#4c8c4a";
+      ctx.fillRect(0, GROUND_Y, WORLD_WIDTH, canvas.height - GROUND_Y);
+
+      // طريق
+      ctx.fillStyle = "#444";
+      ctx.fillRect(0, GROUND_Y - 40, WORLD_WIDTH, 40);
+
+      // خطوط الطريق
+      ctx.strokeStyle = "#ddd";
+      ctx.setLineDash([40, 30]);
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(0, GROUND_Y - 20);
+      ctx.lineTo(WORLD_WIDTH, GROUND_Y - 20);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // مركبات (ديكور)
+      vehicles.forEach((v) => {
+        ctx.fillStyle = "#8b3a3a";
+        ctx.fillRect(v.x, v.y - v.h, v.w, v.h);
+        ctx.fillStyle = "#222";
+        ctx.fillRect(v.x + 10, v.y - 15, 25, 10); // نافذة
+        ctx.fillRect(v.x + v.w - 35, v.y - 15, 25, 10);
+        // عجلات
+        ctx.beginPath();
+        ctx.arc(v.x + 20, v.y, 10, 0, Math.PI * 2);
+        ctx.arc(v.x + v.w - 20, v.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // اللاعب
+      ctx.fillStyle = "#f4d03f";
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+
+      // بندقية
+      ctx.fillStyle = "#222";
+      const gunLength = 30;
+      const gunHeight = 8;
+      const gx = player.facing === 1 ? player.x + player.w : player.x - gunLength;
+      const gy = player.y + 20;
+      ctx.fillRect(gx, gy, gunLength * player.facing, gunHeight);
+
+      // رصاص
+      ctx.fillStyle = "#ff5722";
+      bullets.forEach((b) => {
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+      });
+
+      // أعداء
+      enemies.forEach((e) => {
+        if (!e.alive) return;
+        ctx.fillStyle = "#e74c3c";
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(e.x + 5, e.y + 10, 10, 5); // عين بسيطة
+      });
+
+      ctx.restore();
+
+      // شاشة Game Over
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.font = "40px sans-serif";
+        ctx.fillText("انتهت اللعبة", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = "24px sans-serif";
+        ctx.fillText(
+          "اضغط F5 لإعادة اللعب",
+          canvas.width / 2,
+          canvas.height / 2 + 20
+        );
+      }
+    }
+
+    function loop(timestamp) {
+      const dt = timestamp - lastTime;
+      lastTime = timestamp;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
